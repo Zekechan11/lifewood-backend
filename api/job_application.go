@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crud/util"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -125,10 +127,9 @@ func RegisterRoutes(r *gin.Engine, db *sqlx.DB) {
 		ctx.JSON(http.StatusOK, acceptedApplications)
 	})
 
-	// Accept a job application (Email sending removed)
+	// Accept a job application
 	r.PUT("/job-applications/:id/accept", func(ctx *gin.Context) {
 		id := ctx.Param("id")
-
 		query := `UPDATE job_applications SET approve_status = 'Accepted' WHERE id = ?`
 		_, err := db.Exec(query, id)
 		if err != nil {
@@ -137,12 +138,29 @@ func RegisterRoutes(r *gin.Engine, db *sqlx.DB) {
 			return
 		}
 
+		var application JobApplication
+		err = db.Get(&application, "SELECT * FROM job_applications WHERE id = ?", id)
+		if err != nil {
+			log.Println("Error fetching application for ID:", id, "Error:", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		subject := "Job Application Accepted"
+		body := fmt.Sprintf("Dear %s,\n\nWe are pleased to inform you that your application for the position has been accepted.\n\nBest regards,\nCompany", application.FullName)
+		err = util.SendEmail(application.Email, subject, body)
+		if err != nil {
+			log.Println("Error sending email to:", application.Email, "Error:", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
+			return
+		}
+
 		ctx.JSON(http.StatusOK, gin.H{
-			"message": "Application accepted",
+			"message": "Application accepted and email sent",
 		})
 	})
 
-	// Reject a job application (Email sending removed)
+	// Reject a job application
 	r.PUT("/job-applications/:id/reject", func(ctx *gin.Context) {
 		id := ctx.Param("id")
 
@@ -154,21 +172,38 @@ func RegisterRoutes(r *gin.Engine, db *sqlx.DB) {
 			return
 		}
 
+		var application JobApplication
+		err = db.Get(&application, "SELECT * FROM job_applications WHERE id = ?", id)
+		if err != nil {
+			log.Println("Error fetching application for ID:", id, "Error:", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		subject := "Job Application Rejected"
+		body := fmt.Sprintf("Dear %s,\n\nWe regret to inform you that your application for the position has been rejected.\n\nBest regards,\nCompany", application.FullName)
+		err = util.SendEmail(application.Email, subject, body)
+		if err != nil {
+			log.Println("Error sending email to:", application.Email, "Error:", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
+			return
+		}
+
 		ctx.JSON(http.StatusOK, gin.H{
-			"message": "Application rejected",
+			"message": "Application rejected and email sent",
 		})
 	})
 
-		// Get rejected job applications
-		r.GET("/job-applications/rejected", func(ctx *gin.Context) {
-			var rejectedApplications []JobApplication
-			err := db.Select(&rejectedApplications, "SELECT * FROM job_applications WHERE approve_status = 'Rejected'")
-			if err != nil {
-				ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			ctx.JSON(http.StatusOK, rejectedApplications)
-		})
+	// Get rejected job applications
+	r.GET("/job-applications/rejected", func(ctx *gin.Context) {
+		var rejectedApplications []JobApplication
+		err := db.Select(&rejectedApplications, "SELECT * FROM job_applications WHERE approve_status = 'Rejected'")
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusOK, rejectedApplications)
+	})
 
 	// Delete an accepted job application
 	r.DELETE("/job-applications/:id", func(ctx *gin.Context) {
@@ -191,46 +226,45 @@ func RegisterRoutes(r *gin.Engine, db *sqlx.DB) {
 	})
 
 	// Delete a rejected job application
-r.DELETE("/job-applications/:id/rejected", func(ctx *gin.Context) {
-	id := ctx.Param("id")
+	r.DELETE("/job-applications/:id/rejected", func(ctx *gin.Context) {
+		id := ctx.Param("id")
 
-	var count int
-	err := db.Get(&count, "SELECT COUNT(*) FROM job_applications WHERE id = ? AND approve_status = 'Rejected'", id)
-	if err != nil || count == 0 {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "Rejected application not found"})
-		return
-	}
+		var count int
+		err := db.Get(&count, "SELECT COUNT(*) FROM job_applications WHERE id = ? AND approve_status = 'Rejected'", id)
+		if err != nil || count == 0 {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "Rejected application not found"})
+			return
+		}
 
-	_, err = db.Exec("DELETE FROM job_applications WHERE id = ?", id)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+		_, err = db.Exec("DELETE FROM job_applications WHERE id = ?", id)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 
-	ctx.JSON(http.StatusOK, gin.H{"message": "Rejected application deleted successfully"})
-})
+		ctx.JSON(http.StatusOK, gin.H{"message": "Rejected application deleted successfully"})
+	})
 
-// Restore a rejected job application
-r.PUT("/job-applications/:id/restore", func(ctx *gin.Context) {
-	id := ctx.Param("id")
+	// Restore a rejected job application
+	r.PUT("/job-applications/:id/restore", func(ctx *gin.Context) {
+		id := ctx.Param("id")
 
-	// Check if the application exists and is rejected
-	var count int
-	err := db.Get(&count, "SELECT COUNT(*) FROM job_applications WHERE id = ? AND approve_status = 'Rejected'", id)
-	if err != nil || count == 0 {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "Rejected application not found"})
-		return
-	}
+		// Check if the application exists and is rejected
+		var count int
+		err := db.Get(&count, "SELECT COUNT(*) FROM job_applications WHERE id = ? AND approve_status = 'Rejected'", id)
+		if err != nil || count == 0 {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "Rejected application not found"})
+			return
+		}
 
-	// Update the status back to 'Pending'
-	_, err = db.Exec("UPDATE job_applications SET approve_status = 'Pending' WHERE id = ?", id)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+		// Update the status back to 'Pending'
+		_, err = db.Exec("UPDATE job_applications SET approve_status = 'Pending' WHERE id = ?", id)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 
-	ctx.JSON(http.StatusOK, gin.H{"message": "Rejected application restored successfully"})
-})
-
+		ctx.JSON(http.StatusOK, gin.H{"message": "Rejected application restored successfully"})
+	})
 
 }
